@@ -52,8 +52,8 @@ class FakeDriveShieldApp(tk.Tk):
         super().__init__()
 
         self.title("FakeDriveShield - Storage Authenticity & Reclaimer")
-        self.geometry("860x720")
-        self.minsize(780, 650)
+        self.geometry("940x880")
+        self.resizable(False, False)  # Disable maximize button and window resizing
         self.configure(bg=BG_MAIN)
 
         self.drives = []

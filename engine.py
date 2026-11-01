@@ -31,10 +31,27 @@ SUSPICIOUS_STRINGS = [
     "super top",
 ]
 
+def _get_subprocess_kwargs() -> Dict[str, Any]:
+    """Returns platform-specific subprocess kwargs to suppress popup console windows on Windows."""
+    kwargs: Dict[str, Any] = {}
+    if CURRENT_OS == "windows":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = si
+    return kwargs
+
 def run_cmd(cmd_list: List[str]) -> str:
-    """Runs a system command safely and returns standard output."""
+    """Runs a system command safely and returns standard output without popup console windows."""
     try:
-        proc = subprocess.run(cmd_list, capture_output=True, text=True, check=True)
+        proc = subprocess.run(
+            cmd_list,
+            capture_output=True,
+            text=True,
+            check=True,
+            **_get_subprocess_kwargs()
+        )
         return proc.stdout.strip()
     except Exception:
         return ""
@@ -473,7 +490,13 @@ assign letter={clean_letter}
         f.write(dp_script.strip())
 
     try:
-        proc = subprocess.run(["diskpart", "/s", temp_script], capture_output=True, text=True, check=True)
+        proc = subprocess.run(
+            ["diskpart", "/s", temp_script],
+            capture_output=True,
+            text=True,
+            check=True,
+            **_get_subprocess_kwargs()
+        )
         out = proc.stdout
         status = "Success"
     except Exception as e:
