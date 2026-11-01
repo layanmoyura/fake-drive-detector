@@ -1,0 +1,98 @@
+name: Build and Release Executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag Name (e.g. v1.0.0)'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Windows Executable & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install Build Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+
+      - name: Build Standalone Executable
+        run: |
+          python -m PyInstaller FakeDriveShield.spec --clean --noconfirm
+
+      - name: Verify Executable Created
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\FakeDriveShield.exe")) {
+            Write-Error "dist\FakeDriveShield.exe was not generated."
+            exit 1
+          }
+          $item = Get-Item "dist\FakeDriveShield.exe"
+          Write-Host "Built: $($item.FullName) ($([math]::Round($item.Length / 1MB, 2)) MB)"
+
+      - name: Determine Release Tag & Details
+        id: release_info
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.tag_name }}" ]]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "title=FakeDriveShield ${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+            echo "title=FakeDriveShield ${TAG_NAME}" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "title=FakeDriveShield Latest Continuous Build" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.title }}
+          draft: false
+          prerelease: ${{ steps.release_info.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          body: |
+            ## 🛡️ FakeDriveShield - Storage Authenticity & Capacity Reclaimer
+
+            ### 📦 Direct Download
+            * **[`FakeDriveShield.exe`](https://github.com/${{ github.repository }}/releases/download/${{ steps.release_info.outputs.tag }}/FakeDriveShield.exe)** - Standalone portable Windows desktop application (elevated UAC for partition reclaiming, zero installation required).
+
+            ---
+            ### 🌟 Features
+            * **Zero Dependencies**: Pure standard library, no pip install required.
+            * **ValiDrive-Style Visual Block Map**: Live 384-cell grid highlighting working sectors (🟩) vs counterfeit overwrite sectors (🟥).
+            * **Heuristic Fraud Detection**: Detects spoofed MPTool serials (`121220160204`), corrupted volume serials, and irregular 64KB FAT32 cluster geometry.
+            * **Hardware Capacity Reclaiming**: Locks out phantom storage and creates a safe partition formatted to genuine physical NAND flash.
+            * **Dispute Markdown Reports**: Generates formal consumer dispute declarations for PayPal, Amazon, eBay, AliExpress, and credit card chargebacks.
+          files: |
+            dist/FakeDriveShield.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

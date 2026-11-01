@@ -1,5 +1,11 @@
 # 🛡️ FakeDriveShield - Storage Authenticity & Capacity Reclaimer
 
+<p align="left">
+  <a href="https://github.com/layanmoyura/fake-drive-detector/releases"><img src="https://img.shields.io/github/v/release/layanmoyura/fake-drive-detector?include_prereleases&color=10b981&label=Release" alt="GitHub Release"></a>
+  <a href="https://github.com/layanmoyura/fake-drive-detector/releases/latest"><img src="https://img.shields.io/badge/Download-FakeDriveShield.exe-blue?logo=windows&logoColor=white" alt="Download EXE"></a>
+  <a href="https://github.com/layanmoyura/fake-drive-detector/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+</p>
+
 A cross-platform Python Desktop application that runs anywhere (Windows, macOS, Linux) with zero external pip dependencies. It detects counterfeit / fake-capacity storage drives, visually maps working vs corrupted memory cells (ValiDrive-style), re-partitions the drive to its safe physical size, and generates detailed Markdown (`.md`) audit reports.
 
 <p align="center">
