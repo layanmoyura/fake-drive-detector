@@ -2,6 +2,10 @@
 
 A cross-platform Python Desktop application that runs anywhere (Windows, macOS, Linux) with zero external pip dependencies. It detects counterfeit / fake-capacity storage drives, visually maps working vs corrupted memory cells (ValiDrive-style), re-partitions the drive to its safe physical size, and generates detailed Markdown (`.md`) audit reports.
 
+<p align="center">
+  <img src="assets/ui_screenshot.png" alt="FakeDriveShield Desktop UI" width="850">
+</p>
+
 ---
 
 ## 🌟 Features
