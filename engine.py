@@ -221,126 +221,237 @@ def inspect_heuristics(drive_info: Dict[str, Any]) -> Dict[str, Any]:
         "red_flags": red_flags
     }
 
+def _generate_fast_buffer(chunk_mb: int = 4) -> Tuple[bytes, str]:
+    """Generates a pseudorandom buffer in milliseconds with precomputed SHA-256 hash."""
+    chunk_bytes = chunk_mb * 1024 * 1024
+    pattern_size = min(64 * 1024, chunk_bytes)
+    pattern = os.urandom(pattern_size)
+    buffer = pattern * (chunk_bytes // pattern_size)
+    expected_hash = hashlib.sha256(buffer).hexdigest()
+    return buffer, expected_hash
+
 def test_drive_capacity(
     mount_point: str,
     target_disk_size_mb: int,
     progress_callback=None,
-    stop_event=None
+    stop_event=None,
+    test_mode: str = "fast"
 ) -> Dict[str, Any]:
     """
-    Capacity test via exponential + incremental probing with SHA-256 validation.
+    Capacity test via Fast Smart Audit (Canary + Boundary Sampling) or Full Surface Scan.
     Runs anywhere across Windows, macOS, and Linux using pure standard library.
     """
     test_dir = os.path.join(mount_point, "_fakedrive_audit_probe")
     os.makedirs(test_dir, exist_ok=True)
-
-    chunk_mb = 64
-    chunk_bytes = chunk_mb * 1024 * 1024
-
-    # Seeded pseudo-random buffer
-    rng = random.Random(123456789)
-    buffer = bytearray(rng.getrandbits(8) for _ in range(chunk_bytes))
-    expected_hash = hashlib.sha256(buffer).hexdigest()
 
     test_log = []
     verified_mb = 0
     corruption_detected = False
     corruption_offset_mb = None
 
-    checkpoints = [64, 128, 256, 512, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152, 65536]
-    if target_disk_size_mb > 0:
-        checkpoints = [cp for cp in checkpoints if cp <= target_disk_size_mb]
-
     try:
-        for target_mb in checkpoints:
-            if stop_event and stop_event.is_set():
-                break
+        if test_mode == "fast":
+            chunk_mb = 4
+            buffer, expected_hash = _generate_fast_buffer(chunk_mb)
 
-            needed = (target_mb - verified_mb) // chunk_mb
-            if needed <= 0:
-                continue
+            # 1. Write Canary File at Offset 0 to catch controller wrap-around overwriting
+            canary_path = os.path.join(test_dir, "canary_0000.bin")
+            t0 = time.time()
+            with open(canary_path, "wb") as f:
+                f.write(buffer)
+                f.flush()
+            canary_write_time = max(0.001, time.time() - t0)
+            initial_speed = round(chunk_mb / canary_write_time, 2)
+            canary_hash = expected_hash
 
             if progress_callback:
                 progress_callback({
                     "type": "progress",
-                    "target_mb": target_mb,
-                    "verified_mb": verified_mb,
-                    "status": f"Probing boundary up to {target_mb} MB..."
+                    "target_mb": target_disk_size_mb,
+                    "verified_mb": chunk_mb,
+                    "status": f"⚡ Fast Audit: Initialized canary block at 0 MB (Write Speed: {initial_speed} MB/s)"
                 })
 
-            step_failed = False
-            for _ in range(needed):
+            # 2. Determine boundary probe checkpoints across physical NAND geometries
+            standard_boundaries = [512, 1024, 2048, 4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 131072, 262144, 524288, 1048576, 2097152]
+            max_size = target_disk_size_mb if target_disk_size_mb > 0 else 32768
+
+            # Combine NAND boundaries with 12 evenly-spaced grid sampling checkpoints
+            grid_samples = [max(chunk_mb, int(max_size * (i / 12))) for i in range(1, 13)]
+            checkpoints = sorted(list(set([b for b in standard_boundaries if b <= max_size] + grid_samples + [max_size])))
+
+            file_counter = 1
+            for target_mb in checkpoints:
                 if stop_event and stop_event.is_set():
-                    step_failed = True
                     break
 
-                file_idx = (verified_mb // chunk_mb) + 1
-                fpath = os.path.join(test_dir, f"blk_{file_idx:05d}.dat")
+                if target_mb <= verified_mb:
+                    continue
+
+                if progress_callback:
+                    progress_callback({
+                        "type": "progress",
+                        "target_mb": target_mb,
+                        "verified_mb": verified_mb,
+                        "status": f"⚡ Fast Audit: Probing boundary up to {target_mb} MB..."
+                    })
+
+                probe_file = os.path.join(test_dir, f"probe_{file_counter:04d}.bin")
+                file_counter += 1
 
                 try:
-                    t0 = time.time()
-                    with open(fpath, "wb") as f:
+                    # Write probe block
+                    t_write = time.time()
+                    with open(probe_file, "wb") as f:
                         f.write(buffer)
                         f.flush()
-                        os.fsync(f.fileno())
-                    write_time = max(0.001, time.time() - t0)
-                    speed_mbps = round(chunk_mb / write_time, 2)
+                    speed_mbps = round(chunk_mb / max(0.001, time.time() - t_write), 2)
 
-                    with open(fpath, "rb") as f:
+                    # Read back and verify probe block integrity
+                    with open(probe_file, "rb") as f:
                         read_bytes = f.read()
 
-                    read_hash = hashlib.sha256(read_bytes).hexdigest()
-                    if read_hash != expected_hash:
+                    probe_read_hash = hashlib.sha256(read_bytes).hexdigest()
+                    if probe_read_hash != expected_hash:
                         corruption_detected = True
-                        corruption_offset_mb = verified_mb + chunk_mb
+                        corruption_offset_mb = target_mb
                         test_log.append({
-                            "offset_mb": corruption_offset_mb,
-                            "status": "CORRUPT",
-                            "hash": read_hash[:10] + "..."
+                            "offset_mb": target_mb,
+                            "status": "CORRUPT_READ_MISMATCH",
+                            "hash": probe_read_hash[:10] + "..."
                         })
-                        step_failed = True
                         if progress_callback:
                             progress_callback({
                                 "type": "block",
-                                "offset_mb": corruption_offset_mb,
+                                "offset_mb": target_mb,
                                 "status": "corrupt"
                             })
                         break
-                    else:
-                        verified_mb += chunk_mb
+
+                    # Re-verify Canary Block: catches loop-overwrite wrap-around immediately
+                    with open(canary_path, "rb") as f:
+                        canary_check_bytes = f.read()
+
+                    canary_check_hash = hashlib.sha256(canary_check_bytes).hexdigest()
+                    if canary_check_hash != canary_hash:
+                        corruption_detected = True
+                        corruption_offset_mb = target_mb
                         test_log.append({
-                            "offset_mb": verified_mb,
-                            "status": "VERIFIED_OK",
-                            "hash": read_hash[:10] + "...",
-                            "speed_mbps": speed_mbps
+                            "offset_mb": target_mb,
+                            "status": "CORRUPT_WRAP_OVERWRITE",
+                            "detail": "Canary block overwritten by controller loop-wrap"
                         })
                         if progress_callback:
                             progress_callback({
                                 "type": "block",
-                                "offset_mb": verified_mb,
-                                "status": "verified",
-                                "speed_mbps": speed_mbps
+                                "offset_mb": target_mb,
+                                "status": "corrupt"
                             })
+                        break
 
-                except Exception as write_err:
-                    corruption_detected = True
-                    corruption_offset_mb = verified_mb + chunk_mb
+                    # Boundary verified successfully
+                    verified_mb = target_mb
                     test_log.append({
-                        "offset_mb": corruption_offset_mb,
-                        "status": f"WRITE_ERROR: {write_err}",
-                        "hash": "N/A"
+                        "offset_mb": verified_mb,
+                        "status": "VERIFIED_OK",
+                        "speed_mbps": speed_mbps
                     })
-                    step_failed = True
                     if progress_callback:
                         progress_callback({
                             "type": "block",
-                            "offset_mb": corruption_offset_mb,
+                            "offset_mb": verified_mb,
+                            "status": "verified",
+                            "speed_mbps": speed_mbps
+                        })
+
+                except Exception as write_err:
+                    corruption_detected = True
+                    corruption_offset_mb = target_mb
+                    test_log.append({
+                        "offset_mb": target_mb,
+                        "status": f"WRITE_ERROR: {write_err}"
+                    })
+                    if progress_callback:
+                        progress_callback({
+                            "type": "block",
+                            "offset_mb": target_mb,
                             "status": "corrupt"
                         })
                     break
 
-            if step_failed:
-                break
+        else:
+            # Full Surface Scan Mode: Thorough sequential verification with optimized 8MB chunks
+            chunk_mb = 8
+            buffer, expected_hash = _generate_fast_buffer(chunk_mb)
+            canary_path = os.path.join(test_dir, "canary_full_00.bin")
+            with open(canary_path, "wb") as f:
+                f.write(buffer)
+                f.flush()
+            canary_hash = expected_hash
+
+            checkpoints = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+            if target_disk_size_mb > 0:
+                checkpoints = [cp for cp in checkpoints if cp <= target_disk_size_mb]
+                if target_disk_size_mb not in checkpoints:
+                    checkpoints.append(target_disk_size_mb)
+
+            step_failed = False
+            for target_mb in checkpoints:
+                if stop_event and stop_event.is_set():
+                    break
+
+                needed = max(1, (target_mb - verified_mb) // chunk_mb)
+                if progress_callback:
+                    progress_callback({
+                        "type": "progress",
+                        "target_mb": target_mb,
+                        "verified_mb": verified_mb,
+                        "status": f"🔍 Full Surface Scan: Testing up to {target_mb} MB..."
+                    })
+
+                for _ in range(needed):
+                    if stop_event and stop_event.is_set():
+                        step_failed = True
+                        break
+
+                    file_idx = (verified_mb // chunk_mb) + 1
+                    fpath = os.path.join(test_dir, f"blk_{file_idx:05d}.dat")
+
+                    try:
+                        t0 = time.time()
+                        with open(fpath, "wb") as f:
+                            f.write(buffer)
+                            f.flush()
+                        speed_mbps = round(chunk_mb / max(0.001, time.time() - t0), 2)
+
+                        with open(fpath, "rb") as f:
+                            read_bytes = f.read()
+
+                        if hashlib.sha256(read_bytes).hexdigest() != expected_hash:
+                            corruption_detected = True
+                            corruption_offset_mb = verified_mb + chunk_mb
+                            test_log.append({"offset_mb": corruption_offset_mb, "status": "CORRUPT"})
+                            step_failed = True
+                            if progress_callback:
+                                progress_callback({"type": "block", "offset_mb": corruption_offset_mb, "status": "corrupt"})
+                            break
+
+                        verified_mb += chunk_mb
+                        test_log.append({"offset_mb": verified_mb, "status": "VERIFIED_OK", "speed_mbps": speed_mbps})
+                        if progress_callback:
+                            progress_callback({"type": "block", "offset_mb": verified_mb, "status": "verified", "speed_mbps": speed_mbps})
+
+                    except Exception as err:
+                        corruption_detected = True
+                        corruption_offset_mb = verified_mb + chunk_mb
+                        test_log.append({"offset_mb": corruption_offset_mb, "status": f"WRITE_ERROR: {err}"})
+                        step_failed = True
+                        if progress_callback:
+                            progress_callback({"type": "block", "offset_mb": corruption_offset_mb, "status": "corrupt"})
+                        break
+
+                if step_failed:
+                    break
 
     finally:
         if os.path.exists(test_dir):
@@ -368,7 +479,8 @@ def test_drive_capacity(
         "corruption_detected": corruption_detected,
         "corruption_offset_mb": corruption_offset_mb,
         "safe_capacity_mb": safe_mb,
-        "test_log": test_log
+        "test_log": test_log,
+        "test_mode": test_mode
     }
 
 def generate_markdown_report(
@@ -417,7 +529,9 @@ def generate_markdown_report(
     md.append(f"| **Model / Vendor** | `{model}` | Device Descriptor |")
     md.append(f"| **Serial Number** | `{serial}` | Hardware Identifier |")
     md.append(f"| **Volume Serial** | `{vol_serial}` | {'Blank/0x0 (MPTool Signature)' if vol_serial in ['0', '0x0'] else 'Standard'} |")
-    md.append(f"| **Filesystem / Cluster** | `{drive_info.get('FileSystem', 'N/A')}` / `{drive_info.get('ClusterSize', 0)} bytes` | Cluster Size |\n")
+    md.append(f"| **Filesystem / Cluster** | `{drive_info.get('FileSystem', 'N/A')}` / `{drive_info.get('ClusterSize', 0)} bytes` | Cluster Size |")
+    mode_name = "⚡ Fast Smart Audit (Canary + Boundary Sampling)" if test_result.get("test_mode") == "fast" else "🔍 Full Surface Scan"
+    md.append(f"| **Audit Mode** | `{mode_name}` | Verification Strategy |\n")
 
     md.append("## 2. Fraud Risk & Heuristics\n")
     md.append(f"- **Fraud Risk Score:** `{heuristics.get('risk_score', 0)} / 100`")

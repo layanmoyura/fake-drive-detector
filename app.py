@@ -141,6 +141,27 @@ class FakeDriveShieldApp(tk.Tk):
         self.drive_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         self.drive_combo.bind("<<ComboboxSelected>>", self._on_drive_selected)
 
+        lbl_mode = tk.Label(
+            select_card,
+            text="MODE:",
+            font=("Segoe UI", 8, "bold"),
+            bg=BG_CARD,
+            fg=TEXT_MUTED
+        )
+        lbl_mode.pack(side=tk.LEFT, padx=(4, 4))
+
+        self.mode_var = tk.StringVar(value="⚡ Fast Audit (~30s)")
+        self.mode_combo = ttk.Combobox(
+            select_card,
+            textvariable=self.mode_var,
+            state="readonly",
+            font=("Segoe UI", 8),
+            style="TCombobox",
+            width=18
+        )
+        self.mode_combo["values"] = ["⚡ Fast Audit (~30s)", "🔍 Full Surface Scan"]
+        self.mode_combo.pack(side=tk.LEFT, padx=(0, 8))
+
         btn_refresh = tk.Button(
             select_card,
             text="🔄 Refresh",
@@ -457,6 +478,7 @@ class FakeDriveShieldApp(tk.Tk):
         self.btn_stop.config(state=tk.NORMAL)
         self.btn_fix.config(state=tk.DISABLED)
         self.btn_report.config(state=tk.DISABLED)
+        self.mode_combo.config(state=tk.DISABLED)
         self._reset_map()
 
         self.test_thread = threading.Thread(
@@ -474,11 +496,15 @@ class FakeDriveShieldApp(tk.Tk):
         def on_progress(event):
             self.after(0, self._handle_test_event, event, disk_size_mb)
 
+        mode_str = self.mode_var.get()
+        test_mode = "full" if "Full" in mode_str else "fast"
+
         res = engine.test_drive_capacity(
             mount,
             disk_size_mb,
             progress_callback=on_progress,
-            stop_event=self.stop_event
+            stop_event=self.stop_event,
+            test_mode=test_mode
         )
 
         self.last_test_result = res
@@ -504,15 +530,19 @@ class FakeDriveShieldApp(tk.Tk):
             if status == "verified":
                 for i in range(block_idx + 1):
                     self._set_block_color(i, BLOCK_VERIFIED)
+                if disk_size_mb > 0:
+                    pct = min(100, int((offset_mb / disk_size_mb) * 100))
+                    self.prog_bar["value"] = pct
                 self.lbl_status.config(text=f"Verified {offset_mb} MB OK (Write Speed: {speed} MB/s)")
             elif status == "corrupt":
                 for i in range(block_idx, self.total_blocks):
                     self._set_block_color(i, BLOCK_CORRUPT)
-                self.lbl_status.config(text=f"⚠️ HARD CORRUPTION DETECTED at {offset_mb} MB!")
+                self.lbl_status.config(text=f"⚠️ CORRUPTION / WRAP-AROUND DETECTED at {offset_mb} MB!")
 
     def _finish_test(self, res, disk_size_mb):
         self.btn_start.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.DISABLED)
+        self.mode_combo.config(state="readonly")
 
         verified_mb = res.get("verified_mb", 0)
         is_corrupt = res.get("corruption_detected", False)

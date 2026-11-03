@@ -83,11 +83,29 @@ def interactive_wizard():
         print("Aborted.")
         return
 
-    print("\n[+] Starting capacity integrity verification...")
-    def on_prog(msg):
-        print(f"  -> {msg}")
+    print("\nSelect Verification Strategy:")
+    print("  [1] ⚡ Fast Smart Audit (~30s, Canary Wrap-Around + Boundary Sampling) [Recommended]")
+    print("  [2] 🔍 Full Surface Scan (Thorough sequential verification)")
+    mode_sel = input("Choose mode (1/2) [Default: 1]: ").strip()
+    test_mode = "full" if mode_sel == "2" else "fast"
 
-    test_res = test_drive_capacity(target_letter, disk_size_mb, progress_callback=on_prog)
+    print(f"\n[+] Starting {'⚡ Fast Smart Audit' if test_mode == 'fast' else '🔍 Full Surface Scan'}...")
+    def on_prog(evt):
+        if isinstance(evt, dict):
+            if evt.get("type") == "progress":
+                print(f"  -> {evt.get('status')}")
+            elif evt.get("type") == "block":
+                status = evt.get("status")
+                offset = evt.get("offset_mb")
+                spd = evt.get("speed_mbps", 0)
+                if status == "verified":
+                    print(f"  [✓] Verified OK up to {offset} MB ({spd} MB/s)")
+                else:
+                    print(f"  [✗] CORRUPTION DETECTED at {offset} MB!")
+        else:
+            print(f"  -> {evt}")
+
+    test_res = test_drive_capacity(target_letter, disk_size_mb, progress_callback=on_prog, test_mode=test_mode)
     print("\n--- Test Results ---")
     print(f"Verified Physical Capacity: {test_res['verified_mb']} MB ({test_res['verified_mb']/1024:.2f} GB)")
     if test_res["corruption_detected"]:
@@ -128,6 +146,7 @@ def main():
     parser.add_argument("--list", action="store_true", help="List all connected drives")
     parser.add_argument("--inspect", type=str, metavar="LETTER", help="Inspect heuristics of drive (e.g. D)")
     parser.add_argument("--test", type=str, metavar="LETTER", help="Test capacity and generate Markdown report")
+    parser.add_argument("--mode", type=str, choices=["fast", "full"], default="fast", help="Verification strategy: fast (~30s, default) or full")
     parser.add_argument("--fix", type=str, metavar="LETTER", help="Safely repartition drive to verified size")
     parser.add_argument("--report-dir", type=str, default=None, help="Directory to save Markdown reports")
 
@@ -162,8 +181,19 @@ def main():
             return
         size_mb = int((target.get("DiskSize", 0) or 0) / (1024**2))
         heuristics = inspect_heuristics(target)
-        print(f"Testing Drive {letter}: ({size_mb} MB advertised)...")
-        test_res = test_drive_capacity(letter, size_mb, progress_callback=print)
+        print(f"Testing Drive {letter}: ({size_mb} MB advertised, mode: {args.mode})...")
+        def on_cli_prog(evt):
+            if isinstance(evt, dict):
+                st = evt.get("status", "")
+                if evt.get("type") == "block":
+                    off = evt.get("offset_mb", 0)
+                    spd = evt.get("speed_mbps", 0)
+                    print(f"  [{evt.get('status').upper()}] Offset: {off} MB ({spd} MB/s)")
+                elif evt.get("type") == "progress":
+                    print(f"  -> {st}")
+            else:
+                print(f"  -> {evt}")
+        test_res = test_drive_capacity(letter, size_mb, progress_callback=on_cli_prog, test_mode=args.mode)
 
         out_dir = args.report_dir or os.getcwd()
         fname = f"Audit_Report_Drive_{letter}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
