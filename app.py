@@ -52,7 +52,7 @@ class FakeDriveShieldApp(tk.Tk):
         super().__init__()
 
         self.title("FakeDriveShield - Storage Authenticity & Reclaimer")
-        self.geometry("940x880")
+        self.geometry("900x620")
         self.resizable(False, False)  # Disable maximize button and window resizing
         self.configure(bg=BG_MAIN)
 
@@ -87,18 +87,18 @@ class FakeDriveShieldApp(tk.Tk):
             "Custom.Horizontal.TProgressbar",
             troughcolor=BG_CARD,
             background=ACCENT_BLUE,
-            thickness=14
+            thickness=10
         )
 
     def _build_ui(self):
         # Header Frame
-        header = tk.Frame(self, bg=BG_MAIN, pady=12, padx=20)
+        header = tk.Frame(self, bg=BG_MAIN, pady=6, padx=16)
         header.pack(fill=tk.X)
 
         title_lbl = tk.Label(
             header,
             text="🛡️ FakeDriveShield",
-            font=("Segoe UI", 18, "bold"),
+            font=("Segoe UI", 14, "bold"),
             bg=BG_MAIN,
             fg=TEXT_MAIN
         )
@@ -107,62 +107,59 @@ class FakeDriveShieldApp(tk.Tk):
         subtitle_lbl = tk.Label(
             header,
             text="Universal Storage Authenticity & Capacity Reclaimer",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             bg=BG_MAIN,
             fg=TEXT_MUTED
         )
-        subtitle_lbl.pack(side=tk.LEFT, padx=12, pady=(4, 0))
+        subtitle_lbl.pack(side=tk.LEFT, padx=10, pady=(2, 0))
 
-        # Main Scrollable / Stacked Container
-        container = tk.Frame(self, bg=BG_MAIN, padx=20, pady=5)
+        # Main Container
+        container = tk.Frame(self, bg=BG_MAIN, padx=16, pady=2)
         container.pack(fill=tk.BOTH, expand=True)
 
-        # 1. Drive Selection Panel
-        select_card = tk.Frame(container, bg=BG_CARD, padx=15, pady=12, relief=tk.FLAT)
-        select_card.pack(fill=tk.X, pady=(0, 10))
+        # 1. Drive Selection Panel (Compact single row)
+        select_card = tk.Frame(container, bg=BG_CARD, padx=12, pady=6, relief=tk.FLAT)
+        select_card.pack(fill=tk.X, pady=(0, 6))
 
         lbl_select = tk.Label(
             select_card,
-            text="TARGET DRIVE SELECTION:",
-            font=("Segoe UI", 9, "bold"),
+            text="TARGET DRIVE:",
+            font=("Segoe UI", 8, "bold"),
             bg=BG_CARD,
             fg=TEXT_MUTED
         )
-        lbl_select.pack(anchor=tk.W)
-
-        row_sel = tk.Frame(select_card, bg=BG_CARD, pady=6)
-        row_sel.pack(fill=tk.X)
+        lbl_select.pack(side=tk.LEFT, padx=(0, 8))
 
         self.drive_var = tk.StringVar()
         self.drive_combo = ttk.Combobox(
-            row_sel,
+            select_card,
             textvariable=self.drive_var,
             state="readonly",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             style="TCombobox"
         )
-        self.drive_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.drive_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         self.drive_combo.bind("<<ComboboxSelected>>", self._on_drive_selected)
 
         btn_refresh = tk.Button(
-            row_sel,
+            select_card,
             text="🔄 Refresh",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             bg=BG_CARD_LIGHT,
             fg=TEXT_MAIN,
             activebackground=ACCENT_BLUE,
             activeforeground=TEXT_MAIN,
             relief=tk.FLAT,
-            padx=12,
-            pady=4,
+            padx=10,
+            pady=2,
             cursor="hand2",
             command=self.refresh_drives
         )
         btn_refresh.pack(side=tk.RIGHT)
 
         # 2. Drive Metadata & Heuristic Audit Card
-        self.meta_card = tk.Frame(container, bg=BG_CARD, padx=15, pady=10)
-        self.meta_card.pack(fill=tk.X, pady=(0, 10))
+        self.meta_card = tk.Frame(container, bg=BG_CARD, padx=12, pady=6)
+        self.meta_card.pack(fill=tk.X, pady=(0, 6))
 
         meta_header = tk.Frame(self.meta_card, bg=BG_CARD)
         meta_header.pack(fill=tk.X)
@@ -170,7 +167,7 @@ class FakeDriveShieldApp(tk.Tk):
         self.lbl_device_title = tk.Label(
             meta_header,
             text="No USB drive selected",
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             bg=BG_CARD,
             fg=TEXT_MAIN
         )
@@ -179,27 +176,27 @@ class FakeDriveShieldApp(tk.Tk):
         self.lbl_risk_badge = tk.Label(
             meta_header,
             text="",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             bg=BG_CARD,
             fg=TEXT_MUTED,
-            padx=8,
-            pady=2
+            padx=6,
+            pady=1
         )
         self.lbl_risk_badge.pack(side=tk.RIGHT)
 
         self.lbl_meta_details = tk.Label(
             self.meta_card,
             text="Select a drive above to inspect hardware attributes.",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=BG_CARD,
             fg=TEXT_MUTED,
             justify=tk.LEFT
         )
-        self.lbl_meta_details.pack(anchor=tk.W, pady=(4, 0))
+        self.lbl_meta_details.pack(anchor=tk.W, pady=(2, 0))
 
         # 3. Visual Storage Map (Canvas Grid like ValiDrive)
-        map_card = tk.Frame(container, bg=BG_CARD, padx=15, pady=10)
-        map_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        map_card = tk.Frame(container, bg=BG_CARD, padx=12, pady=6)
+        map_card.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
         map_top = tk.Frame(map_card, bg=BG_CARD)
         map_top.pack(fill=tk.X)
@@ -207,7 +204,7 @@ class FakeDriveShieldApp(tk.Tk):
         lbl_map_title = tk.Label(
             map_top,
             text="STORAGE INTEGRITY MAP",
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 8, "bold"),
             bg=BG_CARD,
             fg=TEXT_MUTED
         )
@@ -216,25 +213,26 @@ class FakeDriveShieldApp(tk.Tk):
         self.lbl_map_stats = tk.Label(
             map_top,
             text="Untested",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=BG_CARD,
             fg=TEXT_MUTED
         )
         self.lbl_map_stats.pack(side=tk.RIGHT)
 
-        # Canvas for blocks
+        # Canvas for blocks (32 columns x 8 rows = 256 blocks)
         self.canvas_cols = 32
-        self.canvas_rows = 12
+        self.canvas_rows = 8
         self.total_blocks = self.canvas_cols * self.canvas_rows
         self.block_items = []
 
         self.canvas = tk.Canvas(
             map_card,
             bg="#0B0F19",
+            height=140,
             highlightthickness=1,
             highlightbackground=BG_CARD_LIGHT
         )
-        self.canvas.pack(fill=tk.BOTH, expand=True, pady=8)
+        self.canvas.pack(fill=tk.BOTH, expand=True, pady=4)
         self.canvas.bind("<Configure>", lambda e: self._draw_grid())
 
         # Legend
@@ -247,8 +245,8 @@ class FakeDriveShieldApp(tk.Tk):
         self._add_legend_item(legend_frame, BLOCK_UNTESTED, "Untested")
 
         # 4. Progress & Status
-        prog_frame = tk.Frame(container, bg=BG_CARD, padx=15, pady=8)
-        prog_frame.pack(fill=tk.X, pady=(0, 10))
+        prog_frame = tk.Frame(container, bg=BG_CARD, padx=12, pady=6)
+        prog_frame.pack(fill=tk.X, pady=(0, 6))
 
         self.prog_bar = ttk.Progressbar(
             prog_frame,
@@ -261,69 +259,69 @@ class FakeDriveShieldApp(tk.Tk):
         self.lbl_status = tk.Label(
             prog_frame,
             text="Ready. Select a drive and click 'Start Audit & Test'.",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=BG_CARD,
             fg=TEXT_MAIN,
             anchor=tk.W
         )
-        self.lbl_status.pack(fill=tk.X, pady=(4, 0))
+        self.lbl_status.pack(fill=tk.X, pady=(2, 0))
 
         # 5. Bottom Action Controls
-        ctrl_frame = tk.Frame(self, bg=BG_MAIN, padx=20, pady=10)
+        ctrl_frame = tk.Frame(self, bg=BG_MAIN, padx=16, pady=8)
         ctrl_frame.pack(fill=tk.X)
 
         self.btn_start = tk.Button(
             ctrl_frame,
             text="▶️ Start Audit & Test",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=ACCENT_BLUE,
             fg="#FFFFFF",
             activebackground="#2563EB",
             relief=tk.FLAT,
-            padx=16,
-            pady=6,
+            padx=12,
+            pady=4,
             cursor="hand2",
             command=self.start_test
         )
-        self.btn_start.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_start.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_stop = tk.Button(
             ctrl_frame,
             text="⏹️ Stop",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             bg=BG_CARD_LIGHT,
             fg=TEXT_MAIN,
             relief=tk.FLAT,
-            padx=14,
-            pady=6,
+            padx=10,
+            pady=4,
             state=tk.DISABLED,
             command=self.stop_test
         )
-        self.btn_stop.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_stop.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_fix = tk.Button(
             ctrl_frame,
             text="🛠️ Reclaim Safe Storage",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=ACCENT_GREEN,
             fg="#FFFFFF",
             relief=tk.FLAT,
-            padx=16,
-            pady=6,
+            padx=12,
+            pady=4,
             state=tk.DISABLED,
             command=self.reclaim_drive
         )
-        self.btn_fix.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_fix.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_report = tk.Button(
             ctrl_frame,
             text="📄 View Markdown Report",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             bg=BG_CARD_LIGHT,
             fg=TEXT_MAIN,
             relief=tk.FLAT,
-            padx=14,
-            pady=6,
+            padx=10,
+            pady=4,
             state=tk.DISABLED,
             command=self.view_report
         )
@@ -331,9 +329,9 @@ class FakeDriveShieldApp(tk.Tk):
 
     def _add_legend_item(self, parent, color, text):
         f = tk.Frame(parent, bg=BG_CARD)
-        f.pack(side=tk.LEFT, padx=(0, 15))
-        c = tk.Canvas(f, width=12, height=12, bg=color, highlightthickness=0)
-        c.pack(side=tk.LEFT, padx=(0, 5))
+        f.pack(side=tk.LEFT, padx=(0, 12))
+        c = tk.Canvas(f, width=10, height=10, bg=color, highlightthickness=0)
+        c.pack(side=tk.LEFT, padx=(0, 4))
         l = tk.Label(f, text=text, font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_MUTED)
         l.pack(side=tk.LEFT)
 
