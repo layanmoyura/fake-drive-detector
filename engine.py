@@ -19,7 +19,6 @@ CURRENT_OS = platform.system().lower()
 
 SUSPICIOUS_STRINGS = [
     "121220160204",
-    "00000000",
     "123456789012",
     "0123456789abcdef",
     "vendorco",
@@ -187,6 +186,11 @@ def inspect_heuristics(drive_info: Dict[str, Any]) -> Dict[str, Any]:
     disk_size = drive_info.get("DiskSize", 0) or 0
     drive_letter = drive_info.get("DriveLetter", "")
 
+    clean_serial = disk_serial.strip().replace("-", "").replace(" ", "").replace("_", "")
+    if clean_serial and clean_serial.strip("0") == "":
+        red_flags.append("Disk Serial is blank/all-zeros (Mass Production Tool MPTool signature).")
+        risk_score += 35
+
     for s in SUSPICIOUS_STRINGS:
         if s in disk_serial or s in friendly_name:
             red_flags.append(f"Suspicious controller signature: '{s}' detected.")
@@ -235,11 +239,12 @@ def test_drive_capacity(
     target_disk_size_mb: int,
     progress_callback=None,
     stop_event=None,
-    test_mode: str = "fast"
+    test_mode: str = "fast",
+    free_space_mb: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Capacity test via Fast Smart Audit (Canary + Boundary Sampling) or Full Surface Scan.
-    Runs anywhere across Windows, macOS, and Linux using pure standard library.
+    Accurately accounts for existing file allocation so free space is tested without false positives.
     """
     test_dir = os.path.join(mount_point, "_fakedrive_audit_probe")
     os.makedirs(test_dir, exist_ok=True)
@@ -248,6 +253,13 @@ def test_drive_capacity(
     verified_mb = 0
     corruption_detected = False
     corruption_offset_mb = None
+
+    # Calculate usable testing limit based on available free space
+    if free_space_mb is not None and free_space_mb > 0:
+        usable_free_mb = max(4, free_space_mb - 32)  # 32MB safety margin for filesystem MFT/FAT
+        test_limit_mb = min(target_disk_size_mb, usable_free_mb)
+    else:
+        test_limit_mb = target_disk_size_mb if target_disk_size_mb > 0 else 32768
 
     try:
         if test_mode == "fast":
@@ -267,18 +279,15 @@ def test_drive_capacity(
             if progress_callback:
                 progress_callback({
                     "type": "progress",
-                    "target_mb": target_disk_size_mb,
+                    "target_mb": test_limit_mb,
                     "verified_mb": chunk_mb,
                     "status": f"⚡ Fast Audit: Initialized canary block at 0 MB (Write Speed: {initial_speed} MB/s)"
                 })
 
             # 2. Determine boundary probe checkpoints across physical NAND geometries
             standard_boundaries = [512, 1024, 2048, 4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 131072, 262144, 524288, 1048576, 2097152]
-            max_size = target_disk_size_mb if target_disk_size_mb > 0 else 32768
-
-            # Combine NAND boundaries with 12 evenly-spaced grid sampling checkpoints
-            grid_samples = [max(chunk_mb, int(max_size * (i / 12))) for i in range(1, 13)]
-            checkpoints = sorted(list(set([b for b in standard_boundaries if b <= max_size] + grid_samples + [max_size])))
+            grid_samples = [max(chunk_mb, int(test_limit_mb * (i / 12))) for i in range(1, 13)]
+            checkpoints = sorted(list(set([b for b in standard_boundaries if b <= test_limit_mb] + grid_samples + [test_limit_mb])))
 
             file_counter = 1
             for target_mb in checkpoints:
@@ -364,20 +373,32 @@ def test_drive_capacity(
                             "speed_mbps": speed_mbps
                         })
 
-                except Exception as write_err:
-                    corruption_detected = True
-                    corruption_offset_mb = target_mb
-                    test_log.append({
-                        "offset_mb": target_mb,
-                        "status": f"WRITE_ERROR: {write_err}"
-                    })
-                    if progress_callback:
-                        progress_callback({
-                            "type": "block",
-                            "offset_mb": target_mb,
-                            "status": "corrupt"
+                except OSError as write_err:
+                    is_disk_full = (getattr(write_err, "winerror", None) == 112 or
+                                    getattr(write_err, "errno", None) == 28 or
+                                    "not enough space" in str(write_err).lower() or
+                                    "space" in str(write_err).lower())
+                    if is_disk_full:
+                        test_log.append({
+                            "offset_mb": verified_mb,
+                            "status": "FREE_SPACE_LIMIT_REACHED",
+                            "detail": f"Reached available free space limit ({verified_mb} MB) without corruption."
                         })
-                    break
+                        break
+                    else:
+                        corruption_detected = True
+                        corruption_offset_mb = target_mb
+                        test_log.append({
+                            "offset_mb": target_mb,
+                            "status": f"WRITE_ERROR: {write_err}"
+                        })
+                        if progress_callback:
+                            progress_callback({
+                                "type": "block",
+                                "offset_mb": target_mb,
+                                "status": "corrupt"
+                            })
+                        break
 
         else:
             # Full Surface Scan Mode: Thorough sequential verification with optimized 8MB chunks
@@ -390,10 +411,9 @@ def test_drive_capacity(
             canary_hash = expected_hash
 
             checkpoints = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
-            if target_disk_size_mb > 0:
-                checkpoints = [cp for cp in checkpoints if cp <= target_disk_size_mb]
-                if target_disk_size_mb not in checkpoints:
-                    checkpoints.append(target_disk_size_mb)
+            checkpoints = [cp for cp in checkpoints if cp <= test_limit_mb]
+            if test_limit_mb not in checkpoints:
+                checkpoints.append(test_limit_mb)
 
             step_failed = False
             for target_mb in checkpoints:
@@ -441,14 +461,26 @@ def test_drive_capacity(
                         if progress_callback:
                             progress_callback({"type": "block", "offset_mb": verified_mb, "status": "verified", "speed_mbps": speed_mbps})
 
-                    except Exception as err:
-                        corruption_detected = True
-                        corruption_offset_mb = verified_mb + chunk_mb
-                        test_log.append({"offset_mb": corruption_offset_mb, "status": f"WRITE_ERROR: {err}"})
-                        step_failed = True
-                        if progress_callback:
-                            progress_callback({"type": "block", "offset_mb": corruption_offset_mb, "status": "corrupt"})
-                        break
+                    except OSError as err:
+                        is_disk_full = (getattr(err, "winerror", None) == 112 or
+                                        getattr(err, "errno", None) == 28 or
+                                        "not enough space" in str(err).lower() or
+                                        "space" in str(err).lower())
+                        if is_disk_full:
+                            test_log.append({
+                                "offset_mb": verified_mb,
+                                "status": "FREE_SPACE_LIMIT_REACHED"
+                            })
+                            step_failed = True
+                            break
+                        else:
+                            corruption_detected = True
+                            corruption_offset_mb = verified_mb + chunk_mb
+                            test_log.append({"offset_mb": corruption_offset_mb, "status": f"WRITE_ERROR: {err}"})
+                            step_failed = True
+                            if progress_callback:
+                                progress_callback({"type": "block", "offset_mb": corruption_offset_mb, "status": "corrupt"})
+                            break
 
                 if step_failed:
                     break
@@ -465,14 +497,16 @@ def test_drive_capacity(
             except Exception:
                 pass
 
-    safe_mb = 0
-    if verified_mb > 0:
-        standard_sizes = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
-        for s in standard_sizes:
-            if s <= verified_mb:
-                safe_mb = s
-        if safe_mb == 0:
-            safe_mb = int(verified_mb * 0.85)
+    safe_mb = target_disk_size_mb
+    if corruption_detected:
+        safe_mb = 0
+        if verified_mb > 0:
+            standard_sizes = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
+            for s in standard_sizes:
+                if s <= verified_mb:
+                    safe_mb = s
+            if safe_mb == 0:
+                safe_mb = int(verified_mb * 0.85)
 
     return {
         "verified_mb": verified_mb,

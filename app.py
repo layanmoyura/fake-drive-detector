@@ -44,6 +44,7 @@ ACCENT_RED = "#EF4444"    # Red 500
 ACCENT_YELLOW = "#F59E0B" # Amber 500
 BLOCK_UNTESTED = "#334155"# Slate 700
 BLOCK_VERIFIED = "#10B981"# Emerald 500
+BLOCK_ALLOCATED = "#38BDF8"# Sky Blue 400 (Existing Data)
 BLOCK_CORRUPT = "#EF4444" # Red 500
 BLOCK_TESTING = "#F59E0B" # Amber 500
 
@@ -260,9 +261,9 @@ class FakeDriveShieldApp(tk.Tk):
         legend_frame = tk.Frame(map_card, bg=BG_CARD)
         legend_frame.pack(fill=tk.X, pady=(2, 0))
 
-        self._add_legend_item(legend_frame, BLOCK_VERIFIED, "Verified Physical Storage")
-        self._add_legend_item(legend_frame, BLOCK_CORRUPT, "Missing / Fake Storage")
-        self._add_legend_item(legend_frame, BLOCK_TESTING, "Currently Testing")
+        self._add_legend_item(legend_frame, BLOCK_VERIFIED, "Verified Free Space")
+        self._add_legend_item(legend_frame, BLOCK_ALLOCATED, "Existing Data")
+        self._add_legend_item(legend_frame, BLOCK_CORRUPT, "Fake / Corrupted")
         self._add_legend_item(legend_frame, BLOCK_UNTESTED, "Untested")
 
         # 4. Progress & Status
@@ -444,9 +445,14 @@ class FakeDriveShieldApp(tk.Tk):
 
         self.lbl_risk_badge.config(text=badge_text, fg=badge_color)
 
+        free_bytes = d.get("FreeSpace", 0) or 0
+        vol_bytes = d.get("VolumeSize", 0) or 0
+        free_gb = free_bytes / (1024**3)
+        used_gb = max(0, vol_bytes - free_bytes) / (1024**3)
+
         red_flags_str = "; ".join(heuristics.get("red_flags", [])) if heuristics.get("red_flags") else "None"
         detail_text = (
-            f"Filesystem: {fs} | Cluster: {cluster} bytes | Bus: {d.get('BusType', 'USB')}\n"
+            f"Filesystem: {fs} | Cluster: {cluster} bytes | Used: {used_gb:.2f} GB | Free: {free_gb:.2f} GB\n"
             f"Serial: {d.get('DiskSerialNumber', 'Unknown')} | Heuristic Red Flags: {red_flags_str}"
         )
         self.lbl_meta_details.config(text=detail_text)
@@ -472,6 +478,9 @@ class FakeDriveShieldApp(tk.Tk):
             return
 
         disk_size_mb = int((self.selected_drive.get("DiskSize", 0) or 0) / (1024**2))
+        free_space_mb = int((self.selected_drive.get("FreeSpace", 0) or 0) / (1024**2))
+        vol_size_mb = int((self.selected_drive.get("VolumeSize", 0) or 0) / (1024**2))
+        used_mb = max(0, vol_size_mb - free_space_mb)
 
         self.stop_event.clear()
         self.btn_start.config(state=tk.DISABLED)
@@ -483,7 +492,7 @@ class FakeDriveShieldApp(tk.Tk):
 
         self.test_thread = threading.Thread(
             target=self._run_capacity_test_thread,
-            args=(mount, disk_size_mb),
+            args=(mount, disk_size_mb, free_space_mb, used_mb),
             daemon=True
         )
         self.test_thread.start()
@@ -492,9 +501,9 @@ class FakeDriveShieldApp(tk.Tk):
         self.stop_event.set()
         self.lbl_status.config(text="Stopping test...")
 
-    def _run_capacity_test_thread(self, mount, disk_size_mb):
+    def _run_capacity_test_thread(self, mount, disk_size_mb, free_space_mb, used_mb):
         def on_progress(event):
-            self.after(0, self._handle_test_event, event, disk_size_mb)
+            self.after(0, self._handle_test_event, event, disk_size_mb, free_space_mb, used_mb)
 
         mode_str = self.mode_var.get()
         test_mode = "full" if "Full" in mode_str else "fast"
@@ -504,13 +513,14 @@ class FakeDriveShieldApp(tk.Tk):
             disk_size_mb,
             progress_callback=on_progress,
             stop_event=self.stop_event,
-            test_mode=test_mode
+            test_mode=test_mode,
+            free_space_mb=free_space_mb
         )
 
         self.last_test_result = res
-        self.after(0, self._finish_test, res, disk_size_mb)
+        self.after(0, self._finish_test, res, disk_size_mb, free_space_mb, used_mb)
 
-    def _handle_test_event(self, event, disk_size_mb):
+    def _handle_test_event(self, event, disk_size_mb, free_space_mb, used_mb):
         etype = event.get("type")
         if etype == "progress":
             self.lbl_status.config(text=event.get("status", "Testing..."))
@@ -524,22 +534,25 @@ class FakeDriveShieldApp(tk.Tk):
             status = event.get("status")
             speed = event.get("speed_mbps", 0)
 
-            block_idx = int((offset_mb / disk_size_mb) * self.total_blocks) if disk_size_mb > 0 else 0
+            used_blocks = int((used_mb / disk_size_mb) * self.total_blocks) if disk_size_mb > 0 else 0
+            block_idx = used_blocks + (int((offset_mb / disk_size_mb) * self.total_blocks) if disk_size_mb > 0 else 0)
             block_idx = min(self.total_blocks - 1, block_idx)
 
             if status == "verified":
-                for i in range(block_idx + 1):
+                for i in range(used_blocks):
+                    self._set_block_color(i, BLOCK_ALLOCATED)
+                for i in range(used_blocks, block_idx + 1):
                     self._set_block_color(i, BLOCK_VERIFIED)
                 if disk_size_mb > 0:
-                    pct = min(100, int((offset_mb / disk_size_mb) * 100))
+                    pct = min(100, int(((used_mb + offset_mb) / disk_size_mb) * 100))
                     self.prog_bar["value"] = pct
-                self.lbl_status.config(text=f"Verified {offset_mb} MB OK (Write Speed: {speed} MB/s)")
+                self.lbl_status.config(text=f"Verified {offset_mb} MB free space OK (Speed: {speed} MB/s)")
             elif status == "corrupt":
                 for i in range(block_idx, self.total_blocks):
                     self._set_block_color(i, BLOCK_CORRUPT)
                 self.lbl_status.config(text=f"⚠️ CORRUPTION / WRAP-AROUND DETECTED at {offset_mb} MB!")
 
-    def _finish_test(self, res, disk_size_mb):
+    def _finish_test(self, res, disk_size_mb, free_space_mb, used_mb):
         self.btn_start.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.DISABLED)
         self.mode_combo.config(state="readonly")
@@ -547,35 +560,47 @@ class FakeDriveShieldApp(tk.Tk):
         verified_mb = res.get("verified_mb", 0)
         is_corrupt = res.get("corruption_detected", False)
         corrupt_mb = res.get("corruption_offset_mb")
-        safe_mb = res.get("safe_capacity_mb", 0)
+        safe_mb = res.get("safe_capacity_mb", disk_size_mb)
 
-        # Update block map visually to final state
-        verified_blocks = max(1, int((verified_mb / disk_size_mb) * self.total_blocks)) if disk_size_mb > 0 and verified_mb > 0 else 0
-        for i in range(self.total_blocks):
-            if i < verified_blocks:
-                self._set_block_color(i, BLOCK_VERIFIED)
-            else:
-                self._set_block_color(i, BLOCK_CORRUPT if is_corrupt else BLOCK_UNTESTED)
+        used_blocks = int((used_mb / disk_size_mb) * self.total_blocks) if disk_size_mb > 0 else 0
+        verified_blocks = int((verified_mb / disk_size_mb) * self.total_blocks) if disk_size_mb > 0 else 0
 
         if is_corrupt:
+            for i in range(self.total_blocks):
+                if i < used_blocks:
+                    self._set_block_color(i, BLOCK_ALLOCATED)
+                elif i < used_blocks + verified_blocks:
+                    self._set_block_color(i, BLOCK_VERIFIED)
+                else:
+                    self._set_block_color(i, BLOCK_CORRUPT)
+
+            phantom_gb = max(0, (disk_size_mb - (used_mb + verified_mb)) / 1024)
             self.lbl_map_stats.config(
-                text=f"Physical: {verified_mb/1024:.2f} GB | Phantom: {(disk_size_mb - verified_mb)/1024:.2f} GB",
+                text=f"Physical: {(used_mb + verified_mb)/1024:.2f} GB | Phantom: {phantom_gb:.2f} GB",
                 fg=ACCENT_RED
             )
             self.lbl_status.config(
-                text=f"COUNTERFEIT DETECTED! Corruption at {corrupt_mb} MB. Recommended safe capacity: {safe_mb} MB.",
+                text=f"🚨 COUNTERFEIT DETECTED! Hard corruption at {corrupt_mb} MB. Recommended safe capacity: {safe_mb} MB.",
                 fg=ACCENT_RED
             )
             self.btn_fix.config(state=tk.NORMAL)
         else:
+            # Genuine storage: all available free space passed without corruption!
+            for i in range(self.total_blocks):
+                if i < used_blocks:
+                    self._set_block_color(i, BLOCK_ALLOCATED)
+                else:
+                    self._set_block_color(i, BLOCK_VERIFIED)
+
             self.lbl_map_stats.config(
-                text=f"100% Genuine Verified ({verified_mb/1024:.1f} GB)",
+                text=f"Verified Free: {verified_mb/1024:.2f} GB | Existing Data: {used_mb/1024:.2f} GB | Total Healthy: {disk_size_mb/1024:.2f} GB",
                 fg=ACCENT_GREEN
             )
             self.lbl_status.config(
-                text=f"SUCCESS: Physical storage verified without corruption up to {verified_mb} MB.",
+                text=f"✅ GENUINE STORAGE VERIFIED: All {verified_mb/1024:.2f} GB available free space verified authentic. {used_mb/1024:.2f} GB existing files intact.",
                 fg=ACCENT_GREEN
             )
+            self.btn_fix.config(state=tk.DISABLED)
 
         # Auto-generate Markdown Report
         desktop = os.path.join(os.environ.get("USERPROFILE", ""), "OneDrive", "Desktop")

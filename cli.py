@@ -105,7 +105,8 @@ def interactive_wizard():
         else:
             print(f"  -> {evt}")
 
-    test_res = test_drive_capacity(target_letter, disk_size_mb, progress_callback=on_prog, test_mode=test_mode)
+    free_space_mb = int((target_drive.get("FreeSpace", 0) or 0) / (1024**2))
+    test_res = test_drive_capacity(target_letter, disk_size_mb, progress_callback=on_prog, test_mode=test_mode, free_space_mb=free_space_mb)
     print("\n--- Test Results ---")
     print(f"Verified Physical Capacity: {test_res['verified_mb']} MB ({test_res['verified_mb']/1024:.2f} GB)")
     if test_res["corruption_detected"]:
@@ -193,7 +194,8 @@ def main():
                     print(f"  -> {st}")
             else:
                 print(f"  -> {evt}")
-        test_res = test_drive_capacity(letter, size_mb, progress_callback=on_cli_prog, test_mode=args.mode)
+        free_space_mb = int((target.get("FreeSpace", 0) or 0) / (1024**2))
+        test_res = test_drive_capacity(letter, size_mb, progress_callback=on_cli_prog, test_mode=args.mode, free_space_mb=free_space_mb)
 
         out_dir = args.report_dir or os.getcwd()
         fname = f"Audit_Report_Drive_{letter}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
